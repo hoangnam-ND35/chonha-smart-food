@@ -1,0 +1,5 @@
+.vscode/
+*.log
+Thumbs.db
+Desktop.ini
+.DS_Store
