@@ -2,9 +2,15 @@
 
 Bản web bán hàng, giao diện và luồng nghiệp vụ bám theo ứng dụng WinForms **Chợ Nhà Smart Food**.
 
+Website công khai: https://hoangnam-ND35.github.io/chonha-smart-food/
+
+Mã nguồn: https://github.com/hoangnam-ND35/chonha-smart-food
+
 ## Mở website
 
-Cách 1 — mở trực tiếp:
+Cách 1 — mở trên GitHub Pages (link phía trên).
+
+Cách 2 — mở trực tiếp trên máy:
 
 - Nhấn đúp `index.html`
 
