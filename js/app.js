@@ -102,6 +102,8 @@ let reviewPage = 1;
 let reviewKw = "";
 let reviewCat = "Tất cả";
 let reviewDraft = null;
+let pendingLogin = null;
+const GUEST_VIEWS = new Set(["home", "products", "detail", "login", "register"]);
 
 const $ = id => document.getElementById(id);
 const vnd = n => new Intl.NumberFormat("vi-VN").format(Math.round(n || 0)) + "đ";
@@ -129,8 +131,24 @@ function walletOf(user) {
   return db.wallets[user];
 }
 
+function requireLogin(msg, name, extra) {
+  pendingLogin = { view: name || "home", extra: extra || null, add: extra?.add || null, msg: msg || "Đăng nhập để mua hàng." };
+  view = "login";
+  toast(pendingLogin.msg);
+  render();
+}
+
 function nav(name, extra) {
-  if (!db.session && name !== "register") { view = "login"; render(); return; }
+  if (name === "login" || name === "register") {
+    view = name;
+    render();
+    window.scrollTo({ top: 0, behavior: "instant" });
+    return;
+  }
+  if (!db.session && !GUEST_VIEWS.has(name)) {
+    requireLogin("Đăng nhập để mua hàng và dùng tài khoản.", name, extra);
+    return;
+  }
   view = name;
   if (extra?.id) detailId = extra.id;
   if (extra?.cat) catFilter = extra.cat;
@@ -146,7 +164,8 @@ function logout() {
   db.session = null;
   db.cart = [];
   persist();
-  view = "login";
+  view = "home";
+  toast("Đã đăng xuất. Bạn vẫn xem được sản phẩm.");
   render();
 }
 
@@ -158,8 +177,15 @@ function login(e) {
   if (!found) { $("login-err").textContent = "Đăng nhập không thành công."; return; }
   db.session = { user: found.user, name: found.name, role: found.role, email: found.email, phone: found.phone };
   persist();
-  view = isAdmin() ? "admin" : "home";
+  const pending = pendingLogin;
+  pendingLogin = null;
   adminView = "dashboard";
+  if (isAdmin()) view = "admin";
+  else {
+    view = pending?.view && pending.view !== "login" && pending.view !== "register" ? pending.view : "home";
+    if (pending?.extra?.id) detailId = pending.extra.id;
+    if (pending?.add) addCartNow(pending.add.id, pending.add.qty);
+  }
   toast("Xin chào, " + found.name);
   render();
 }
@@ -192,6 +218,15 @@ function cartCount() { return db.cart.reduce((s, x) => s + x.qty, 0); }
 function product(id) { return db.products.find(p => p.id === id); }
 
 function addCart(id, qty = 1) {
+  if (!db.session) {
+    requireLogin("Đăng nhập để thêm vào giỏ và mua hàng.", view === "detail" ? "detail" : "products", { id, add: { id, qty } });
+    return;
+  }
+  addCartNow(id, qty);
+  render();
+}
+
+function addCartNow(id, qty = 1) {
   const p = product(id);
   if (!p || !p.active) return toast("Sản phẩm không còn bán.");
   const line = db.cart.find(x => x.id === id);
@@ -201,7 +236,6 @@ function addCart(id, qty = 1) {
   else db.cart.push({ id, qty, name: p.name, price: p.price, img: p.img, unit: p.unit });
   persist();
   toast("Đã thêm " + p.name + " vào giỏ.");
-  render();
 }
 
 function setQty(id, d) {
@@ -252,6 +286,7 @@ function totals() {
 
 function doCheckout(e) {
   e.preventDefault();
+  if (!db.session) { requireLogin("Đăng nhập để đặt hàng.", "checkout"); return; }
   if (!db.cart.length) return;
   const name = $("ck-name").value.trim();
   const phone = $("ck-phone").value.trim();
@@ -361,9 +396,10 @@ function renderAuth() {
           <button class="btn green xl block">Đăng ký</button>
         </form>
         <p>Đã có tài khoản? <a href="#" onclick="view='login';render();return false" style="color:var(--primary);font-weight:700">Đăng nhập</a></p>
+        <p><a href="#" onclick="view='home';render();return false">← Xem sản phẩm không cần đăng nhập</a></p>
       ` : `
         <h2>Chào mừng đến với Chợ Nhà</h2>
-        <p class="muted">Đăng nhập để đi chợ sạch cùng trợ lý AI.</p>
+        <p class="muted">${pendingLogin?.msg ? esc(pendingLogin.msg) : "Đăng nhập để mua hàng. Bạn vẫn xem sản phẩm khi chưa đăng nhập."}</p>
         <form onsubmit="login(event)">
           <div class="field"><label>Tên đăng nhập / Email</label><input id="login-user" value="customer"></div>
           <div class="field"><label>Mật khẩu</label><input id="login-pass" type="password" value="Customer@123"></div>
@@ -372,6 +408,7 @@ function renderAuth() {
           <button class="btn green xl block">Đăng nhập</button>
         </form>
         <p>Chưa có tài khoản? <a href="#" onclick="view='register';render();return false" style="color:var(--primary);font-weight:700">Đăng ký ngay</a></p>
+        <p><a href="#" onclick="view='home';render();return false">← Xem sản phẩm không cần đăng nhập</a></p>
       `}
     </div>
   </div>`;
@@ -379,6 +416,9 @@ function renderAuth() {
 
 function customerShell(inner) {
   const me = db.session;
+  const accountBtn = me
+    ? `<button class="btn ghost" onclick="nav('account')" style="gap:8px">${(() => { const u = db.users.find(x => x.user === me.user) || {}; return avatarHtml(u, 28) + " " + esc(me.name); })()}</button>`
+    : `<button class="btn" onclick="nav('login')">Đăng nhập</button><button class="btn ghost" onclick="nav('register')">Đăng ký</button>`;
   return `
   <header class="shell-top">
     <div class="header">
@@ -392,12 +432,12 @@ function customerShell(inner) {
           <button class="btn ghost" onclick="nav('cart')">Giỏ hàng</button>
           ${cartCount() ? `<span class="cart-badge">${cartCount() > 99 ? "99+" : cartCount()}</span>` : ""}
         </div>
-        <button class="btn ghost" onclick="nav('account')" style="gap:8px">${(() => { const u = db.users.find(x => x.user === me.user) || {}; return avatarHtml(u, 28) + " " + esc(me.name); })()}</button>
+        ${accountBtn}
       </div>
     </div>
     <nav class="nav-bar">
       ${NAV_CUSTOMER.map(([k, t]) => `<button class="nav-btn ${view === k || (k === "products" && view === "detail") ? "on" : ""}" onclick="nav('${k}')">${t}</button>`).join("")}
-      <button class="nav-btn" onclick="logout()">Đăng xuất</button>
+      ${me ? `<button class="nav-btn" onclick="logout()">Đăng xuất</button>` : ""}
     </nav>
   </header>
   <main>${inner}</main>
@@ -412,8 +452,8 @@ function renderHome() {
     <section class="hero-home">
       <div>
         <div class="eyebrow">Ưu đãi đặc biệt cho thành viên mới</div>
-        <h1 style="color:var(--green-dark);font-size:28px">Chào mừng ${esc(db.session.name)} đến với Chợ Nhà!</h1>
-        <p class="muted">Thực phẩm sạch lạnh mồ mỗi ngày cho tổ ấm của bạn.<br>Nguồn gốc rõ ràng từ nông trại VietGAP, giao tận bếp giờ trong đô thị.</p>
+        <h1 style="color:var(--green-dark);font-size:28px">${db.session ? `Chào mừng ${esc(db.session.name)} đến với Chợ Nhà!` : "Chào mừng đến với Chợ Nhà!"}</h1>
+        <p class="muted">${db.session ? "Thực phẩm sạch lạnh mồ mỗi ngày cho tổ ấm của bạn.<br>Nguồn gốc rõ ràng từ nông trại VietGAP, giao tận bếp giờ trong đô thị." : "Xem sản phẩm tự do. Đăng nhập khi muốn thêm vào giỏ và thanh toán."}</p>
         <div class="pills">
           <span class="pill">100% Rau chuẩn VietGAP & GlobalGAP</span>
           <span class="pill">Tươi từ nông sản mỗi ngày</span>
@@ -1040,6 +1080,7 @@ function buySpin() {
 }
 
 function openAi(prompt) {
+  if (!db.session) { requireLogin("Đăng nhập để dùng trợ lý AI.", "ai"); return; }
   view = "ai";
   render();
   if (prompt) setTimeout(() => askAi(prompt), 50);
@@ -1419,12 +1460,12 @@ function doSearch(e) {
 
 function render() {
   const root = $("app");
-  if (!db.session && view !== "register") {
-    view = "login";
+  if (view === "login" || view === "register") {
     root.innerHTML = renderAuth();
     return;
   }
-  if (view === "login" || view === "register") {
+  if (!db.session && !GUEST_VIEWS.has(view)) {
+    view = "login";
     root.innerHTML = renderAuth();
     return;
   }
