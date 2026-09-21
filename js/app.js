@@ -6,7 +6,6 @@ const NAV_CUSTOMER = [
   ["home", "Trang chủ"],
   ["products", "Sản phẩm"],
   ["cart", "Giỏ hàng"],
-  ["ai", "Trợ lý AI"],
   ["orders", "Đơn hàng"],
   ["account", "Tài khoản"],
   ["reviews", "Đánh giá"],
@@ -54,6 +53,8 @@ function seed() {
       customer: { xu: 20000, spins: 3, lastCheckin: "", vouchers: [], points: 0 }
     },
     chat: [],
+    chatThreads: [],
+    activeChatId: null,
     wheel: WHEEL_PRIZES.map(p => ({ ...p }))
   };
   store.save(s);
@@ -66,9 +67,20 @@ function migrate(s) {
   s.reviews ||= [];
   s.wallets ||= {};
   s.chat ||= [];
+  s.chatThreads ||= [];
   s.orders ||= [];
   s.cart ||= [];
   if (!s.wheel?.length) s.wheel = WHEEL_PRIZES.map(p => ({ ...p }));
+  if (s.chat.length && !s.chatThreads.length) {
+    const id = Date.now();
+    s.chatThreads.push({
+      id,
+      title: (s.chat.find(m => m.role === "me")?.text || "Trò chuyện").slice(0, 48),
+      when: new Date().toLocaleString("vi-VN"),
+      messages: s.chat.map(m => ({ ...m }))
+    });
+    s.activeChatId = id;
+  }
   const byId = Object.fromEntries(PRODUCTS_SEED.map(p => [p.id, p]));
   s.products.forEach(p => {
     const seed = byId[p.id];
@@ -103,7 +115,12 @@ let reviewKw = "";
 let reviewCat = "Tất cả";
 let reviewDraft = null;
 let pendingLogin = null;
-const GUEST_VIEWS = new Set(["home", "products", "detail", "login", "register"]);
+let menuOpen = false;
+let aiOpen = false;
+let aiShowHistory = false;
+let homeAdIndex = 0;
+let homeAdTimer = null;
+const GUEST_VIEWS = new Set(["home", "products", "detail", "account", "login", "register"]);
 
 const $ = id => document.getElementById(id);
 const vnd = n => new Intl.NumberFormat("vi-VN").format(Math.round(n || 0)) + "đ";
@@ -138,7 +155,19 @@ function requireLogin(msg, name, extra) {
   render();
 }
 
+function toggleMenu(force) {
+  menuOpen = typeof force === "boolean" ? force : !menuOpen;
+  const panel = document.getElementById("menu-panel");
+  const btn = document.getElementById("menu-toggle");
+  if (panel) panel.classList.toggle("open", menuOpen);
+  if (btn) {
+    btn.classList.toggle("open", menuOpen);
+    btn.setAttribute("aria-expanded", menuOpen ? "true" : "false");
+  }
+}
+
 function nav(name, extra) {
+  menuOpen = false;
   if (name === "login" || name === "register") {
     view = name;
     render();
@@ -163,6 +192,7 @@ function logout() {
   if (!confirm("Đăng xuất khỏi hệ thống?")) return;
   db.session = null;
   db.cart = [];
+  menuOpen = false;
   persist();
   view = "home";
   toast("Đã đăng xuất. Bạn vẫn xem được sản phẩm.");
@@ -401,8 +431,8 @@ function renderAuth() {
         <h2>Chào mừng đến với Chợ Nhà</h2>
         <p class="muted">${pendingLogin?.msg ? esc(pendingLogin.msg) : "Đăng nhập để mua hàng. Bạn vẫn xem sản phẩm khi chưa đăng nhập."}</p>
         <form onsubmit="login(event)">
-          <div class="field"><label>Tên đăng nhập / Email</label><input id="login-user" value="customer"></div>
-          <div class="field"><label>Mật khẩu</label><input id="login-pass" type="password" value="Customer@123"></div>
+          <div class="field"><label>Tên đăng nhập / Email</label><input id="login-user" autocomplete="username" placeholder="Nhập tên đăng nhập hoặc email"></div>
+          <div class="field"><label>Mật khẩu</label><input id="login-pass" type="password" autocomplete="current-password" placeholder="Nhập mật khẩu"></div>
           <label class="chk"><input type="checkbox" onchange="document.getElementById('login-pass').type=this.checked?'text':'password'"> Hiện mật khẩu</label>
           <div class="err" id="login-err"></div>
           <button class="btn green xl block">Đăng nhập</button>
@@ -411,17 +441,25 @@ function renderAuth() {
         <p><a href="#" onclick="view='home';render();return false">← Xem sản phẩm không cần đăng nhập</a></p>
       `}
     </div>
-  </div>`;
+  </div>
+  ${aiFabHtml()}`;
 }
 
 function customerShell(inner) {
   const me = db.session;
   const accountBtn = me
     ? `<button class="btn ghost" onclick="nav('account')" style="gap:8px">${(() => { const u = db.users.find(x => x.user === me.user) || {}; return avatarHtml(u, 28) + " " + esc(me.name); })()}</button>`
-    : `<button class="btn" onclick="nav('login')">Đăng nhập</button><button class="btn ghost" onclick="nav('register')">Đăng ký</button>`;
+    : `<button class="btn ghost" onclick="nav('account')">Tài khoản</button><button class="btn" onclick="nav('login')">Đăng nhập</button><button class="btn ghost" onclick="nav('register')">Đăng ký</button>`;
+  const items = NAV_CUSTOMER.map(([k, t]) =>
+    `<button class="nav-btn ${view === k || (k === "products" && view === "detail") ? "on" : ""}" onclick="nav('${k}')">${t}</button>`
+  ).join("");
+  const logoutBtn = me ? `<button class="nav-btn" onclick="logout()">Đăng xuất</button>` : "";
   return `
   <header class="shell-top">
     <div class="header">
+      <button type="button" id="menu-toggle" class="menu-toggle ${menuOpen ? "open" : ""}" aria-label="Mở menu" aria-expanded="${menuOpen ? "true" : "false"}" onclick="toggleMenu()">
+        <span></span><span></span><span></span>
+      </button>
       ${logo()}
       <form class="search" onsubmit="doSearch(event)">
         <input id="q" placeholder="Tìm sản phẩm..." value="${esc(keyword)}">
@@ -435,13 +473,102 @@ function customerShell(inner) {
         ${accountBtn}
       </div>
     </div>
-    <nav class="nav-bar">
-      ${NAV_CUSTOMER.map(([k, t]) => `<button class="nav-btn ${view === k || (k === "products" && view === "detail") ? "on" : ""}" onclick="nav('${k}')">${t}</button>`).join("")}
-      ${me ? `<button class="nav-btn" onclick="logout()">Đăng xuất</button>` : ""}
+    <nav id="menu-panel" class="site-nav ${menuOpen ? "open" : ""}" aria-label="Danh mục trang">
+      <div class="site-nav-inner">
+        ${items}
+        ${logoutBtn}
+      </div>
     </nav>
   </header>
   <main>${inner}</main>
-  <footer class="site">Chợ Nhà Smart Food · Thực phẩm sạch tận bếp · Giao 2H · Tổng đài 1900 6868</footer>`;
+  <footer class="site">Chợ Nhà Smart Food · Thực phẩm sạch tận bếp · Giao 2H · Tổng đài 1900 6868</footer>
+  ${aiFabHtml()}`;
+}
+
+function homeAds() {
+  const themes = [
+    { cat: "Hải sản", title: "HẢI SẢN TƯƠI", slogan: "ĐÁNH BẮT TRONG NGÀY · GIAO LẠNH 2H", tone: "sea" },
+    { cat: "Thịt", title: "THỊT SẠCH", slogan: "MỔ SÁNG · BẢO ÔN TẬN BẾP", tone: "meat" },
+    { cat: "Rau củ", title: "RAU CỦ VIETGAP", slogan: "TƯƠI XANH MỖI NGÀY", tone: "veg" },
+    { cat: "Trái cây", title: "TRÁI CÂY THEO MÙA", slogan: "NGỌT TỰ NHIÊN · CHỌN LỌC", tone: "fruit" },
+    { cat: "Gạo & mì", title: "GẠO & MÌ", slogan: "BỮA SÁNG NO LÂU · TIỆN LỢI", tone: "grain" }
+  ];
+  return themes.map(t => {
+    const items = db.products.filter(p => p.active && p.cat === t.cat && p.img).slice(0, 4);
+    return { ...t, items };
+  }).filter(t => t.items.length >= 2);
+}
+
+function homeAdPrev() {
+  const n = homeAds().length || 1;
+  homeAdIndex = (homeAdIndex - 1 + n) % n;
+  paintHomeAd();
+  restartHomeAdTimer();
+}
+
+function homeAdNext(fromAuto) {
+  const n = homeAds().length || 1;
+  homeAdIndex = (homeAdIndex + 1) % n;
+  paintHomeAd();
+  if (!fromAuto) restartHomeAdTimer();
+}
+
+function homeAdGo(i) {
+  homeAdIndex = i;
+  paintHomeAd();
+  restartHomeAdTimer();
+}
+
+function paintHomeAd() {
+  const host = document.querySelector(".ad-slider");
+  if (!host) {
+    if (view === "home") render();
+    return;
+  }
+  const box = document.createElement("div");
+  box.innerHTML = renderHomeAds().trim();
+  const next = box.firstElementChild;
+  if (next) host.replaceWith(next);
+}
+
+function restartHomeAdTimer() {
+  clearInterval(homeAdTimer);
+  homeAdTimer = null;
+  if (view !== "home") return;
+  if (!homeAds().length) return;
+  homeAdTimer = setInterval(() => {
+    if (view !== "home") {
+      clearInterval(homeAdTimer);
+      homeAdTimer = null;
+      return;
+    }
+    homeAdNext(true);
+  }, 5000);
+}
+
+function renderHomeAds() {
+  const slides = homeAds();
+  if (!slides.length) return "";
+  if (homeAdIndex >= slides.length) homeAdIndex = 0;
+  const s = slides[homeAdIndex];
+  return `<section class="ad-slider" data-tone="${esc(s.tone)}">
+    <button type="button" class="ad-nav prev" onclick="homeAdPrev()" aria-label="Quảng cáo trước">‹</button>
+    <button type="button" class="ad-nav next" onclick="homeAdNext()" aria-label="Quảng cáo sau">›</button>
+    <div class="ad-slide" onclick="nav('products',{cat:'${esc(s.cat)}'})">
+      <div class="ad-copy">
+        <div class="ad-brand">Chợ Nhà Smart Food</div>
+        <h2>${esc(s.title)}</h2>
+        <p>${esc(s.slogan)}</p>
+        <span class="ad-cta">Xem ${esc(s.cat)} →</span>
+      </div>
+      <div class="ad-collage">
+        ${s.items.map((p, i) => `<img class="ad-pic n${i}" src="${p.img}" alt="${esc(p.name)}" onerror="this.style.display='none'">`).join("")}
+      </div>
+    </div>
+    <div class="ad-dots">
+      ${slides.map((_, i) => `<button type="button" class="${i === homeAdIndex ? "on" : ""}" onclick="event.stopPropagation();homeAdGo(${i})" aria-label="Slide ${i + 1}"></button>`).join("")}
+    </div>
+  </section>`;
 }
 
 function renderHome() {
@@ -449,6 +576,7 @@ function renderHome() {
   const meals = db.products.filter(p => p.active).slice(5, 8);
   const cats = db.categories.filter(c => c.active);
   return `<div class="wrap page">
+    ${renderHomeAds()}
     <section class="hero-home">
       <div>
         <div class="eyebrow">Ưu đãi đặc biệt cho thành viên mới</div>
@@ -527,7 +655,7 @@ function renderProducts() {
   const list = filtered();
   const cats = ["Tất cả", ...db.categories.filter(c => c.active).map(c => c.name)];
   return `<div class="wrap page">
-    <h2>Sản phẩm</h2>
+    <h2>${catFilter === "Tất cả" ? "Sản phẩm" : esc(catFilter)}</h2>
     <p class="muted">${list.length} sản phẩm · Giao lạnh 2H</p>
     <div class="nav-bar" style="padding-left:0;background:transparent">
       ${cats.map(c => `<button class="nav-btn ${c === catFilter ? "on" : ""}" onclick="setCat(this.dataset.cat)" data-cat="${esc(c)}">${esc(c)}</button>`).join("")}
@@ -680,10 +808,48 @@ function renderOrders() {
 function avatarHtml(u, size) {
   const s = size || 72;
   if (u.avatar) return `<img class="avatar" src="${u.avatar}" alt="" style="width:${s}px;height:${s}px">`;
-  return `<div class="avatar empty" style="width:${s}px;height:${s}px">👤</div>`;
+  const icon = Math.round(s * 0.55);
+  return `<div class="avatar empty" style="width:${s}px;height:${s}px" aria-hidden="true"><svg width="${icon}" height="${icon}" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="8" r="3.5" fill="#5b21b6"/><path d="M5 19.5c0-3.4 3.1-5.5 7-5.5s7 2.1 7 5.5" fill="#5b21b6"/></svg></div>`;
 }
 
 function renderAccount() {
+  if (!db.session) {
+    return `<div class="wrap page account">
+      <aside class="card">
+        <div class="side-profile">
+          ${avatarHtml({}, 96)}
+          <b>Khách</b>
+          <div class="muted">Chưa đăng nhập</div>
+          <div class="price">Thành viên</div>
+          <button class="btn block" style="margin-top:12px" onclick="requireLogin('Đăng nhập để xem thông tin tài khoản.','account')">Đăng nhập để xem thông tin</button>
+          <button type="button" class="linkish" onclick="nav('register')">Tạo tài khoản mới</button>
+        </div>
+        <div class="side-menu" style="margin-top:12px">
+          <button class="on">Hồ sơ</button>
+          <button onclick="requireLogin('Đăng nhập để xem địa chỉ.','account')">Địa chỉ</button>
+          <button onclick="requireLogin('Đăng nhập để đổi mật khẩu.','account')">Mật khẩu</button>
+          <button onclick="requireLogin('Đăng nhập để xem đơn hàng.','account')">Đơn hàng</button>
+          <button onclick="openAi()">Trợ lý AI</button>
+        </div>
+      </aside>
+      <div>
+        <div class="vip">
+          <div class="eyebrow" style="color:#fff">VIP Chợ Nhà</div>
+          <h2 style="color:#fff">Tài khoản của bạn</h2>
+          <p>Đăng nhập để xem điểm thưởng, đơn hàng và ưu đãi thành viên.</p>
+        </div>
+        <div class="card">
+          <h3>Chưa có thông tin</h3>
+          <p class="muted">Bạn đang xem trang tài khoản ở chế độ khách. Đăng nhập để mở hồ sơ, địa chỉ, mật khẩu và lịch sử đơn hàng.</p>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px">
+            <button class="btn" onclick="requireLogin('Đăng nhập để xem thông tin tài khoản.','account')">Đăng nhập</button>
+            <button class="btn ghost" onclick="nav('register')">Đăng ký</button>
+            <button class="btn ghost" onclick="nav('products')">Xem sản phẩm</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
   const u = db.users.find(x => x.user === db.session.user) || {};
   const w = walletOf(db.session.user);
   const spent = db.orders.filter(o => o.user === db.session.user && o.status !== "Đã hủy").reduce((s, o) => s + o.total, 0);
@@ -705,7 +871,7 @@ function renderAccount() {
       </div>
       <div class="side-menu" style="margin-top:12px">
         ${tabs.map(([k, t]) => `<button class="${accountTab === k ? "on" : ""}" onclick="accountTab='${k}';render()">${t}</button>`).join("")}
-        <button onclick="nav('ai')">Trợ lý AI</button>
+        <button onclick="openAi()">Trợ lý AI</button>
         <button onclick="logout()">Đăng xuất</button>
       </div>
     </aside>
@@ -1080,23 +1246,47 @@ function buySpin() {
 }
 
 function openAi(prompt) {
-  if (!db.session) { requireLogin("Đăng nhập để dùng trợ lý AI.", "ai"); return; }
-  view = "ai";
+  if (!db.session) { requireLogin("Đăng nhập để dùng trợ lý AI.", view === "login" ? "home" : view); return; }
+  aiOpen = true;
   render();
   if (prompt) setTimeout(() => askAi(prompt), 50);
+}
+
+function toggleAiWidget(force) {
+  if (!db.session) { requireLogin("Đăng nhập để dùng trợ lý AI.", view === "login" || view === "register" ? "home" : view); return; }
+  aiOpen = typeof force === "boolean" ? force : !aiOpen;
+  if (!aiOpen) aiShowHistory = false;
+  render();
 }
 
 function fold(s) {
   return (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/g, "d");
 }
 
+function syncActiveChatThread() {
+  db.chatThreads ||= [];
+  if (!db.chat.length) return;
+  if (!db.activeChatId) db.activeChatId = Date.now();
+  const title = (db.chat.find(m => m.role === "me")?.text || "Trò chuyện mới").slice(0, 48);
+  const when = new Date().toLocaleString("vi-VN");
+  const idx = db.chatThreads.findIndex(t => t.id === db.activeChatId);
+  const payload = { id: db.activeChatId, title, when, messages: db.chat.map(m => ({ ...m })) };
+  if (idx >= 0) db.chatThreads[idx] = payload;
+  else db.chatThreads.unshift(payload);
+}
+
 function askAi(text) {
-  const msg = (text || $("ai-in")?.value || "").trim();
+  if (!db.session) { requireLogin("Đăng nhập để dùng trợ lý AI.", view === "login" || view === "register" ? "home" : view); return; }
+  const msg = (text || $("fab-ai-in")?.value || $("ai-in")?.value || "").trim();
   if (!msg) return;
+  if (!db.activeChatId) db.activeChatId = Date.now();
   db.chat.push({ role: "me", text: msg });
   db.chat.push({ role: "bot", text: thinkAi(msg) });
+  syncActiveChatThread();
   persist();
   if ($("ai-in")) $("ai-in").value = "";
+  if ($("fab-ai-in")) $("fab-ai-in").value = "";
+  aiOpen = true;
   render();
 }
 
@@ -1126,16 +1316,80 @@ function thinkAi(raw) {
   }
   const region = /bac|ha noi/.test(f) ? "chuẩn vị Bắc (canh chua, luộc, kho vừa miệng)" : "cân bằng dinh dưỡng";
   const recHtml = picks.map(p => `• ${p.name} — ${vnd(p.price)}/${p.unit}`).join("\n");
-  return `Chào ${db.session.name}! Mình là trợ lý Smart Food AI.\n\nGợi ý mâm cơm ${n} người, ngân sách ~${vnd(cap)}, ${region}.\n\n${recHtml}\n\nTạm tính ${vnd(sum)} · còn dư ${vnd(Math.max(0, cap - sum))}.\nBấm nút bên phải để thêm từng món vào giỏ, hoặc nói mình biết khẩu vị (ít dầu / hải sản / eat-clean).`;
+  const who = db.session?.name || "bạn";
+  return `Chào ${who}! Mình là trợ lý Smart Food AI.\n\nGợi ý mâm cơm ${n} người, ngân sách ~${vnd(cap)}, ${region}.\n\n${recHtml}\n\nTạm tính ${vnd(sum)} · còn dư ${vnd(Math.max(0, cap - sum))}.\nBấm nút bên phải để thêm từng món vào giỏ, hoặc nói mình biết khẩu vị (ít dầu / hải sản / eat-clean).`;
+}
+
+function newAiChat() {
+  if (!db.session) return;
+  syncActiveChatThread();
+  db.chat = [];
+  db.activeChatId = Date.now();
+  aiShowHistory = false;
+  persist();
+  toast("Đã tạo cuộc trò chuyện mới.");
+  render();
+}
+
+function loadAiChat(id) {
+  if (!db.session) return;
+  syncActiveChatThread();
+  const t = (db.chatThreads || []).find(x => x.id === id);
+  if (!t) return;
+  db.chat = (t.messages || []).map(m => ({ ...m }));
+  db.activeChatId = id;
+  aiShowHistory = false;
+  persist();
+  render();
+}
+
+function deleteAiChat(id) {
+  if (!db.session) return;
+  db.chatThreads = (db.chatThreads || []).filter(t => t.id !== id);
+  if (db.activeChatId === id) {
+    db.chat = [];
+    db.activeChatId = Date.now();
+  }
+  persist();
+  toast("Đã xóa cuộc trò chuyện.");
+  render();
+}
+
+function toggleAiHistory() {
+  aiShowHistory = !aiShowHistory;
+  render();
+}
+
+function chatBubblesHtml(logId) {
+  const list = db.chat.length
+    ? db.chat
+    : [{ role: "bot", text: "Chào bạn! Hãy cho AI biết gia đình có mấy người, ngân sách và món muốn ăn hôm nay." }];
+  return `<div class="chat-log" id="${logId}">${list.map(m => `<div class="bubble ${m.role}">${esc(m.text)}</div>`).join("")}</div>`;
+}
+
+function aiHistoryHtml() {
+  const threads = (db.chatThreads || []).filter(t => (t.messages || []).some(m => m.role === "me"));
+  if (!threads.length) return `<div class="ai-hist-empty">Chưa có lịch sử trò chuyện.</div>`;
+  return threads.map(t => `
+    <div class="ai-hist-item ${t.id === db.activeChatId ? "on" : ""}">
+      <button type="button" class="ai-hist-main" onclick="loadAiChat(${t.id})">
+        <b>${esc(t.title)}</b>
+        <span>${esc(t.when)}</span>
+      </button>
+      <button type="button" class="ai-hist-del" title="Xóa" onclick="deleteAiChat(${t.id})">×</button>
+    </div>`).join("");
 }
 
 function renderAi() {
   const recs = db.products.filter(p => p.active).slice(0, 6);
   return `<div class="wrap page ai-box">
     <div class="chat">
-      <div class="chat-log" id="chat-log">
-        ${(db.chat.length ? db.chat : [{ role: "bot", text: "Chào bạn! Hãy cho AI biết gia đình có mấy người, ngân sách và món muốn ăn hôm nay." }]).map(m => `<div class="bubble ${m.role}">${esc(m.text)}</div>`).join("")}
+      <div class="ai-toolbar">
+        <button class="btn ghost sm" onclick="newAiChat()">+ Trò chuyện mới</button>
+        <button class="btn ghost sm" onclick="toggleAiHistory()">${aiShowHistory ? "Ẩn lịch sử" : "Lịch sử trò chuyện"}</button>
       </div>
+      ${aiShowHistory ? `<div class="ai-history">${aiHistoryHtml()}</div>` : ""}
+      ${chatBubblesHtml("chat-log")}
       <form class="chat-form" onsubmit="event.preventDefault();askAi()">
         <input id="ai-in" placeholder="Ví dụ: 4 người, 200.000đ, vị Bắc">
         <button class="btn">Gửi</button>
@@ -1143,13 +1397,66 @@ function renderAi() {
     </div>
     <aside class="card">
       <h3>Gợi ý nhanh</h3>
-      <button class="btn ghost block" style="margin:6px 0" onclick="openAi('Mâm cơm gia đình 4 người, ngân sách 200.000đ, vị Bắc')">Mâm cơm 4 người</button>
-      <button class="btn ghost block" style="margin:6px 0" onclick="openAi('Bữa sáng eat-clean 2 người 80.000đ')">Bữa sáng eat-clean</button>
-      <button class="btn ghost block" style="margin:6px 0" onclick="openAi('Hải sản tươi cho 3 người 300.000đ')">Hải sản tươi</button>
+      <button class="btn ghost block" style="margin:6px 0" onclick="askAi('Mâm cơm gia đình 4 người, ngân sách 200.000đ, vị Bắc')">Mâm cơm 4 người</button>
+      <button class="btn ghost block" style="margin:6px 0" onclick="askAi('Bữa sáng eat-clean 2 người 80.000đ')">Bữa sáng eat-clean</button>
+      <button class="btn ghost block" style="margin:6px 0" onclick="askAi('Hải sản tươi cho 3 người 300.000đ')">Hải sản tươi</button>
       <h3 style="margin-top:16px">Thêm vào giỏ</h3>
       ${recs.map(p => `<div class="meal-row">${pic(p.img, p.name)}<div style="flex:1"><b>${esc(p.name)}</b><div class="price">${vnd(p.price)}</div></div><button class="btn sm" onclick="addCart(${p.id})">+</button></div>`).join("")}
     </aside>
   </div>`;
+}
+
+function aiFabHtml() {
+  const recs = db.products.filter(p => p.active).slice(0, 4);
+  const hasUserMsg = (db.chat || []).some(m => m.role === "me");
+  const suggestBlock = hasUserMsg ? "" : `
+        <div class="ai-fab-quick">
+          <button type="button" onclick="askAi('Mâm cơm gia đình 4 người, ngân sách 200.000đ, vị Bắc')">Mâm 4 người</button>
+          <button type="button" onclick="askAi('Bữa sáng eat-clean 2 người 80.000đ')">Eat-clean</button>
+          <button type="button" onclick="askAi('Hải sản tươi cho 3 người 300.000đ')">Hải sản</button>
+        </div>
+        <div class="ai-fab-cart">
+          ${recs.map(p => `<div class="meal-row">${pic(p.img, p.name)}<div style="flex:1"><b>${esc(p.name)}</b><div class="price">${vnd(p.price)}</div></div><button class="btn sm" onclick="addCart(${p.id})">+</button></div>`).join("")}
+        </div>`;
+  return `
+  <div id="ai-fab" class="ai-fab ${aiOpen ? "open" : ""}">
+    ${aiOpen ? `
+      <div class="ai-fab-panel">
+        <div class="ai-fab-head">
+          <div>
+            <b>Trợ lý AI</b>
+            <span>Smart Food · gợi ý mâm cơm</span>
+          </div>
+          <div class="ai-fab-actions">
+            <button type="button" class="ai-icon-btn" title="Lịch sử" onclick="toggleAiHistory()">☰</button>
+            <button type="button" class="ai-icon-btn" title="Trò chuyện mới" onclick="newAiChat()">＋</button>
+            <button type="button" class="ai-icon-btn" title="Đóng" onclick="toggleAiWidget(false)">×</button>
+          </div>
+        </div>
+        ${aiShowHistory ? `<div class="ai-history fab">${aiHistoryHtml()}</div>` : ""}
+        ${chatBubblesHtml("fab-chat-log")}
+        ${suggestBlock}
+        <form class="chat-form" onsubmit="event.preventDefault();askAi()">
+          <input id="fab-ai-in" placeholder="Hỏi AI: số người, ngân sách...">
+          <button class="btn">Gửi</button>
+        </form>
+      </div>` : ""}
+    <button type="button" class="ai-fab-tab" onclick="toggleAiWidget()" aria-label="Mở trợ lý AI">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M4 6.5A3.5 3.5 0 0 1 7.5 3h6A3.5 3.5 0 0 1 17 6.5V10a3.5 3.5 0 0 1-3.5 3.5h-1.2L9 16.2V13.5H7.5A3.5 3.5 0 0 1 4 10V6.5Z" fill="#ee4d2d"/>
+        <path d="M10 12.5A3.5 3.5 0 0 1 13.5 9H16a3.5 3.5 0 0 1 3.5 3.5V16A3.5 3.5 0 0 1 16 19.5h-1.1L12 22v-2.5h-1.5A3.5 3.5 0 0 1 7 16v-1" stroke="#ee4d2d" stroke-width="1.6" fill="#fff"/>
+        <path d="M8.2 8.2c.7.7 1.8.7 2.5 0" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+      <span>Trợ lý AI</span>
+    </button>
+  </div>`;
+}
+
+function scrollAiLogs() {
+  ["chat-log", "fab-chat-log"].forEach(id => {
+    const log = $(id);
+    if (log) log.scrollTop = log.scrollHeight;
+  });
 }
 
 function adminShell(inner) {
@@ -1462,11 +1769,13 @@ function render() {
   const root = $("app");
   if (view === "login" || view === "register") {
     root.innerHTML = renderAuth();
+    scrollAiLogs();
     return;
   }
   if (!db.session && !GUEST_VIEWS.has(view)) {
     view = "login";
     root.innerHTML = renderAuth();
+    scrollAiLogs();
     return;
   }
   if (isAdmin()) {
@@ -1498,10 +1807,9 @@ function render() {
   else inner = renderHome();
   root.innerHTML = customerShell(inner);
   if (view === "voucher") requestAnimationFrame(drawWheel);
-  if (view === "ai") {
-    const log = $("chat-log");
-    if (log) log.scrollTop = log.scrollHeight;
-  }
+  scrollAiLogs();
+  if (view === "home") restartHomeAdTimer();
+  else { clearInterval(homeAdTimer); homeAdTimer = null; }
 }
 
 window.addEventListener("load", render);
