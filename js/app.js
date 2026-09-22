@@ -1,4 +1,4 @@
-const KEY = "chonha-web-vs-v2";
+const KEY = "chonha-web-vs-v3";
 const EXPRESS_FEE = 25000;
 const SLOT_FEE = 15000;
 const SHOP_PROMO_CAP = 40000;
@@ -90,12 +90,21 @@ function migrate(s) {
   (s.orders || []).forEach(o => (o.items || []).forEach(i => {
     if (byId[i.id]?.img) i.img = byId[i.id].img;
   }));
+  if (isDemoSession(s.session)) s.session = null;
   persistSafe(s);
   return s;
 }
 
 function persistSafe(s) {
-  try { localStorage.setItem(KEY, JSON.stringify(s)); } catch { /* ignore */ }
+  try {
+    const copy = JSON.parse(JSON.stringify(s));
+    if (isDemoSession(copy.session)) copy.session = null;
+    localStorage.setItem(KEY, JSON.stringify(copy));
+  } catch { /* ignore */ }
+}
+
+function isDemoSession(sess) {
+  return !!(sess && (sess.user === "customer" || sess.name === "Khách hàng demo"));
 }
 
 let db = store.load();
@@ -131,7 +140,7 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": 
 const isAdmin = () => db.session?.role === "ADMIN" || db.session?.role === "STAFF";
 const isAdminOnly = () => db.session?.role === "ADMIN";
 
-function persist() { store.save(db); }
+function persist() { persistSafe(db); }
 
 function prizes() {
   if (!db.wheel?.length) db.wheel = WHEEL_PRIZES.map(p => ({ ...p }));
