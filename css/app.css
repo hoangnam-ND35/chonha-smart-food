@@ -1041,8 +1041,24 @@ aside .avatar.empty,
 .rev-tools { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 16px; }
 .rev-tools input, .rev-tools select { height: 32px; border: 1px solid var(--outline); border-radius: 8px; padding: 0 10px; background: #fff; }
 .rev-tools input { flex: 1; min-width: 180px; }
-.rev-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
-.rev-card { background: #fff; border: 1px solid var(--outline); border-radius: 12px; padding: 10px; position: relative; cursor: pointer; }
+.rev-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; padding-top: 8px; overflow: visible; }
+.rev-card {
+  background: #fff;
+  border: 1px solid var(--outline);
+  border-radius: 12px;
+  padding: 10px;
+  position: relative;
+  z-index: 1;
+  cursor: pointer;
+  transition: transform .22s ease, box-shadow .22s ease, border-color .22s ease;
+  will-change: transform;
+}
+.rev-card:hover {
+  transform: translateY(-8px);
+  box-shadow: 0 14px 28px rgba(0, 110, 47, .16), 0 4px 10px rgba(0, 0, 0, .08);
+  border-color: var(--primary-2);
+  z-index: 3;
+}
 .rev-card.on { border-color: var(--primary); border-width: 2px; }
 .rev-card input { position: absolute; top: 10px; left: 10px; z-index: 2; }
 .rev-card .pic { width: 100%; height: 120px; object-fit: cover; border-radius: 8px; margin: 18px 0 8px; }
