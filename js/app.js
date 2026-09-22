@@ -101,6 +101,8 @@ function persistSafe(s) {
 let db = store.load();
 let view = "home";
 let adminView = "dashboard";
+let adminCustomerEdit = null;
+let adminCustomerView = null;
 let catFilter = "Tất cả";
 let keyword = "";
 let detailId = null;
@@ -1624,11 +1626,121 @@ function setOrderStatus(ma, st) {
 
 function renderAdminCustomers() {
   const cs = db.users.filter(u => u.role === "CUSTOMER");
-  return `<h2>Khách hàng</h2>
-    <div class="table-wrap"><table><tr><th>Tên</th><th>Tài khoản</th><th>SĐT</th><th>Đơn</th></tr>
-    ${cs.map(u => `<tr><td>${esc(u.name)}</td><td>${esc(u.user)}</td><td>${esc(u.phone || "")}</td>
-      <td>${db.orders.filter(o => o.user === u.user).length}</td></tr>`).join("")}
+  const isNew = adminCustomerEdit === "new";
+  const cur = isNew ? { name: "", user: "", pass: "", phone: "", email: "" } : db.users.find(u => u.user === adminCustomerEdit);
+  const seen = db.users.find(u => u.user === adminCustomerView && u.role === "CUSTOMER");
+  const viewBox = seen ? `
+    <div class="card acc-view">
+      <h3>Thông tin đăng nhập</h3>
+      <p class="muted">${esc(seen.name)}</p>
+      <div class="acc-view-row"><span>Tài khoản</span><b>${esc(seen.user)}</b></div>
+      <div class="acc-view-row"><span>Mật khẩu</span><b>${esc(seen.pass || "(chưa có)")}</b></div>
+      <div class="acc-view-row"><span>SĐT</span><b>${esc(seen.phone || "—")}</b></div>
+      <div class="acc-view-row"><span>Email</span><b>${esc(seen.email || "—")}</b></div>
+      <div class="hero-actions" style="margin-top:10px">
+        <button class="btn" type="button" onclick="editCustomer('${esc(seen.user)}')">Sửa tài khoản</button>
+        <button class="btn ghost" type="button" onclick="adminCustomerView=null;render()">Đóng</button>
+      </div>
+    </div>` : "";
+  const form = cur ? `
+    <form class="card" style="margin:12px 0" onsubmit="saveCustomer(event,'${isNew ? "" : esc(cur.user)}')">
+      <h3>${isNew ? "Thêm tài khoản khách hàng" : "Sửa tài khoản"}</h3>
+      <div class="admin-form-grid">
+        <div class="field"><label>Họ tên</label><input id="ac-name" required value="${esc(cur.name)}"></div>
+        <div class="field"><label>Tài khoản</label><input id="ac-user" required minlength="3" value="${esc(cur.user)}"></div>
+        <div class="field"><label>Mật khẩu</label><input id="ac-pass" required minlength="6" value="${esc(cur.pass || "")}"></div>
+        <div class="field"><label>Số điện thoại</label><input id="ac-phone" value="${esc(cur.phone || "")}"></div>
+        <div class="field"><label>Email</label><input id="ac-email" type="email" value="${esc(cur.email || "")}"></div>
+      </div>
+      <div class="hero-actions" style="margin-top:8px">
+        <button class="btn" type="submit">Lưu tài khoản</button>
+        <button class="btn ghost" type="button" onclick="adminCustomerEdit=null;render()">Hủy</button>
+      </div>
+    </form>` : "";
+  return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+      <h2>Khách hàng</h2>
+      <button class="btn" onclick="editCustomer()">Thêm tài khoản</button>
+    </div>
+    ${viewBox}
+    ${form}
+    <div class="table-wrap"><table>
+      <tr><th>Tên</th><th>Tài khoản</th><th>Mật khẩu</th><th>SĐT</th><th>Email</th><th>Đơn</th><th></th></tr>
+      ${cs.map(u => `<tr class="${adminCustomerView === u.user ? "on-row" : ""}">
+        <td>${esc(u.name)}</td>
+        <td>${esc(u.user)}</td>
+        <td>${esc(u.pass || "")}</td>
+        <td>${esc(u.phone || "")}</td>
+        <td>${esc(u.email || "")}</td>
+        <td>${db.orders.filter(o => o.user === u.user).length}</td>
+        <td>
+          <button class="btn ghost sm" onclick="viewCustomer('${esc(u.user)}')">Xem</button>
+          <button class="btn ghost sm" onclick="editCustomer('${esc(u.user)}')">Sửa</button>
+          <button class="btn danger sm" onclick="deleteCustomer('${esc(u.user)}')">Xóa</button>
+        </td>
+      </tr>`).join("") || "<tr><td colspan='7'>Chưa có khách hàng</td></tr>"}
     </table></div>`;
+}
+
+function viewCustomer(user) {
+  adminCustomerView = user;
+  adminCustomerEdit = null;
+  render();
+}
+
+function editCustomer(user) {
+  adminCustomerEdit = user || "new";
+  render();
+}
+
+function saveCustomer(e, oldUser) {
+  e.preventDefault();
+  const name = $("ac-name").value.trim();
+  const user = $("ac-user").value.trim();
+  const pass = $("ac-pass").value;
+  const phone = $("ac-phone").value.trim();
+  const email = $("ac-email").value.trim();
+  if (name.length < 3) return toast("Nhập họ tên.");
+  if (user.length < 3) return toast("Tài khoản tối thiểu 3 ký tự.");
+  if (pass.length < 6) return toast("Mật khẩu tối thiểu 6 ký tự.");
+  if (db.users.some(u => u.user === user && u.user !== oldUser)) return toast("Tên đăng nhập đã tồn tại.");
+  if (oldUser) {
+    const u = db.users.find(x => x.user === oldUser);
+    if (!u) return toast("Không tìm thấy tài khoản.");
+    if (user !== oldUser) {
+      if (db.wallets[oldUser]) {
+        db.wallets[user] = db.wallets[oldUser];
+        delete db.wallets[oldUser];
+      }
+      db.orders.forEach(o => { if (o.user === oldUser) o.user = user; });
+      db.reviews.forEach(r => { if (r.user === oldUser) r.user = user; });
+      if (db.session?.user === oldUser) {
+        db.session.user = user;
+        db.session.name = name;
+        db.session.email = email;
+        db.session.phone = phone;
+      }
+    }
+    Object.assign(u, { name, user, pass, phone, email });
+  } else {
+    db.users.push({ user, pass, name, role: "CUSTOMER", email, phone, address: "", budget: 200000, gender: "", prefs: [] });
+    walletOf(user);
+  }
+  adminCustomerEdit = null;
+  persist();
+  toast(oldUser ? "Đã cập nhật tài khoản." : "Đã thêm tài khoản khách hàng.");
+  render();
+}
+
+function deleteCustomer(user) {
+  const u = db.users.find(x => x.user === user && x.role === "CUSTOMER");
+  if (!u) return;
+  if (!confirm("Xóa tài khoản " + u.user + "?")) return;
+  db.users = db.users.filter(x => x.user !== user);
+  delete db.wallets[user];
+  if (adminCustomerEdit === user) adminCustomerEdit = null;
+  persist();
+  toast("Đã xóa tài khoản.");
+  render();
 }
 
 function renderAdminReviews() {
