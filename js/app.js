@@ -1,4 +1,4 @@
-const KEY = "chonha-web-vs-v1";
+const KEY = "chonha-web-vs-v2";
 const EXPRESS_FEE = 25000;
 const SLOT_FEE = 15000;
 const SHOP_PROMO_CAP = 40000;
@@ -116,6 +116,7 @@ let reviewCat = "Tất cả";
 let reviewDraft = null;
 let pendingLogin = null;
 let menuOpen = false;
+let adminMenuOpen = false;
 let aiOpen = false;
 let aiShowHistory = false;
 let homeAdIndex = 0;
@@ -193,6 +194,7 @@ function logout() {
   db.session = null;
   db.cart = [];
   menuOpen = false;
+  adminMenuOpen = false;
   persist();
   view = "home";
   toast("Đã đăng xuất. Bạn vẫn xem được sản phẩm.");
@@ -430,9 +432,9 @@ function renderAuth() {
       ` : `
         <h2>Chào mừng đến với Chợ Nhà</h2>
         <p class="muted">${pendingLogin?.msg ? esc(pendingLogin.msg) : "Đăng nhập để mua hàng. Bạn vẫn xem sản phẩm khi chưa đăng nhập."}</p>
-        <form onsubmit="login(event)">
-          <div class="field"><label>Tên đăng nhập / Email</label><input id="login-user" autocomplete="username" placeholder="Nhập tên đăng nhập hoặc email"></div>
-          <div class="field"><label>Mật khẩu</label><input id="login-pass" type="password" autocomplete="current-password" placeholder="Nhập mật khẩu"></div>
+        <form onsubmit="login(event)" autocomplete="off">
+          <div class="field"><label>Tên đăng nhập / Email</label><input id="login-user" name="chonha-user" autocomplete="off" placeholder="Nhập tên đăng nhập hoặc email" value=""></div>
+          <div class="field"><label>Mật khẩu</label><input id="login-pass" name="chonha-pass" type="password" autocomplete="new-password" placeholder="Nhập mật khẩu" value=""></div>
           <label class="chk"><input type="checkbox" onchange="document.getElementById('login-pass').type=this.checked?'text':'password'"> Hiện mật khẩu</label>
           <div class="err" id="login-err"></div>
           <button class="btn green xl block">Đăng nhập</button>
@@ -442,7 +444,7 @@ function renderAuth() {
       `}
     </div>
   </div>
-  ${aiFabHtml()}`;
+  ${view === "login" ? "" : aiFabHtml()}`;
 }
 
 function customerShell(inner) {
@@ -1459,15 +1461,33 @@ function scrollAiLogs() {
   });
 }
 
+function toggleAdminMenu(force) {
+  adminMenuOpen = typeof force === "boolean" ? force : !adminMenuOpen;
+  const shell = document.querySelector(".admin");
+  if (shell) shell.classList.toggle("menu-open", adminMenuOpen);
+}
+
+function goAdmin(name) {
+  adminMenuOpen = false;
+  adminView = name;
+  render();
+}
+
 function adminShell(inner) {
   const items = [...NAV_ADMIN, ...(isAdminOnly() ? NAV_ADMIN_EXTRA : []), ["logout", "Đăng xuất"]];
-  return `<div class="admin">
+  return `<div class="admin ${adminMenuOpen ? "menu-open" : ""}">
+    <div class="admin-backdrop" onclick="toggleAdminMenu(false)"></div>
     <aside class="sidebar">
       <div class="side-brand">${LOGO_SVG}<span>Chợ Nhà<br>Admin</span></div>
-      ${items.map(([k, t]) => `<button class="${adminView === k ? "on" : ""}" onclick="${k === "logout" ? "logout()" : "adminView='" + k + "';render()"}">${t}</button>`).join("")}
+      ${items.map(([k, t]) => `<button class="${adminView === k ? "on" : ""}" onclick="${k === "logout" ? "logout()" : "goAdmin('" + k + "')"}">${t}</button>`).join("")}
     </aside>
     <div class="admin-main">
-      <div class="admin-top">Xin chào, ${esc(db.session.name)}</div>
+      <div class="admin-top">
+        <button type="button" class="admin-menu-toggle ${adminMenuOpen ? "open" : ""}" aria-label="Mở menu admin" onclick="toggleAdminMenu()">
+          <span></span><span></span><span></span>
+        </button>
+        <div class="admin-hello">Xin chào, ${esc(db.session.name)}</div>
+      </div>
       <div class="admin-body">${inner}</div>
     </div>
   </div>`;
@@ -1769,12 +1789,22 @@ function render() {
   const root = $("app");
   if (view === "login" || view === "register") {
     root.innerHTML = renderAuth();
+    if (view === "login") {
+      const u = $("login-user");
+      const p = $("login-pass");
+      if (u) u.value = "";
+      if (p) p.value = "";
+    }
     scrollAiLogs();
     return;
   }
   if (!db.session && !GUEST_VIEWS.has(view)) {
     view = "login";
     root.innerHTML = renderAuth();
+    const u = $("login-user");
+    const p = $("login-pass");
+    if (u) u.value = "";
+    if (p) p.value = "";
     scrollAiLogs();
     return;
   }
