@@ -446,7 +446,7 @@ function renderAuth() {
       `}
     </div>
   </div>
-  ${view === "login" ? "" : aiFabHtml()}`;
+  `;
 }
 
 function customerShell(inner) {
